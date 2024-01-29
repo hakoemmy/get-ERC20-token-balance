@@ -1,4 +1,9 @@
 import { ethers } from "ethers";
+import {
+  Multicall,
+  ContractCallResults,
+  ContractCallContext,
+} from "ethereum-multicall";
 import { ERC20Token } from "../interfaces";
 import { formatTokenBalanceToETH } from "../utils";
 
@@ -24,23 +29,54 @@ export default class WalletController {
       }
 
       const rpcEndpoint = `https://${network}.infura.io/v3/${process.env.INFURA_API_KEY}`;
-      const provider = new ethers.JsonRpcProvider(rpcEndpoint);
+      const provider = new ethers.providers.JsonRpcProvider(rpcEndpoint);
 
-      const balancePromises = erc20Tokens.map(async (token) => {
-        const erc20Contract = new ethers.Contract(
-          token.token_address,
-          ["function balanceOf(address) view returns (uint256)"],
-          provider
-        );
-        const balance = await erc20Contract.balanceOf(userAddress);
-        return {
-          symbol: token.symbol,
-          token_balance: balance.toString(),
-          eth_value: formatTokenBalanceToETH(balance, token.decimals),
-        };
+      const multicall = new Multicall({
+        ethersProvider: provider,
+        tryAggregate: true,
       });
 
-      const balances = await Promise.all(balancePromises);
+      // Application Binary Interface (ABI)
+      const ABI = ["function balanceOf(address) view returns (uint256)"];
+
+      //  Group all available erc 20 tokens request into a single call
+      const callRequests: ContractCallContext<ERC20Token>[] = erc20Tokens.map(
+        (token) => {
+          return {
+            reference: token.symbol,
+            contractAddress: token.token_address,
+            abi: ABI,
+            calls: [
+              {
+                reference: "balanceOf",
+                methodName: "balanceOf",
+                methodParameters: [userAddress],
+              },
+            ],
+            context: token,
+          };
+        }
+      );
+
+      const multicallResult: ContractCallResults = await multicall.call(
+        callRequests
+      );
+
+      const balances = Object.entries(multicallResult.results).map(
+        ([key, result]) => {
+          const token = result.originalContractCallContext.context;
+          const balance = ethers.utils.defaultAbiCoder.decode(
+            ["uint256"],
+            result.callsReturnContext[0].returnValues
+          )[0];
+          return {
+            symbol: token.symbol,
+            token_balance: balance.toString(),
+            eth_value: formatTokenBalanceToETH(balance, token.decimals),
+          };
+        }
+      );
+
       return balances;
     } catch (error) {
       console.error("Error fetching token balances:", error);
