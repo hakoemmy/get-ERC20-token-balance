@@ -1,10 +1,10 @@
-import { ethers } from "ethers";
+import { ethers, Wallet } from "ethers";
 import {
   Multicall,
   ContractCallResults,
   ContractCallContext,
 } from "ethereum-multicall";
-import { ERC20Token } from "../interfaces";
+import { ERC20Token, ERC20TokenWithBalance } from "../interfaces";
 import { formatTokenBalanceToETH } from "../utils";
 
 export default class WalletController {
@@ -29,6 +29,7 @@ export default class WalletController {
       }
 
       const rpcEndpoint = `https://${network}.infura.io/v3/${process.env.INFURA_API_KEY}`;
+
       const provider = new ethers.providers.JsonRpcProvider(rpcEndpoint);
 
       const multicall = new Multicall({
@@ -73,6 +74,8 @@ export default class WalletController {
             symbol: token.symbol,
             token_balance: balance.toString(),
             eth_value: formatTokenBalanceToETH(balance, token.decimals),
+            token_address: token.token_address,
+            decimals: token.decimals,
           };
         }
       );
@@ -80,6 +83,45 @@ export default class WalletController {
       return balances;
     } catch (error) {
       console.error("Error fetching token balances:", error);
+    }
+  }
+
+  public static async sendERC20Tokens(
+    recipientAddress: string,
+    erc20Tokens: ERC20TokenWithBalance[]
+  ) {
+    try {
+      const transferABI = ["function transfer(address to, uint256 amount)"];
+      const provider = new ethers.providers.JsonRpcProvider(
+        "https://rpc.avocado.instadapp.io"
+      );
+      const wallet = new ethers.Wallet(`${process.env.PRIVATE_KEY}`, provider);
+
+      // Iterate through each ERC-20 token and send the balance to the recipient address
+      for (const token of erc20Tokens) {
+        const erc20Contract = new ethers.Contract(
+          token.token_address,
+          transferABI,
+          wallet
+        );
+
+        // Call the transfer function
+        const transaction = await erc20Contract.transfer(
+          recipientAddress,
+          token.token_balance
+        );
+
+        // Wait for the transaction to be mined
+        const receipt = await transaction.wait();
+
+        console.log(
+          `Sent ${token.decimals} ${token.symbol} to ${recipientAddress}. Transaction Hash: ${receipt.transactionHash}`
+        );
+      }
+
+      console.log(`All ERC-20 tokens sent successfully to ${recipientAddress}`);
+    } catch (error) {
+      console.error("Error transferring ERC20 tokens::", error);
     }
   }
 }
